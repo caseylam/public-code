@@ -2,20 +2,7 @@ from alexmods.specutils.spectrum import read_mike_spectrum
 from astropy.io import fits
 import matplotlib.pyplot as plt
 import numpy as np
-
-order_center_blue = [27, 63, 98, 133, 168, 201,
-                     235, 268, 300, 332, 363, 394,
-                     424, 454, 484, 513, 541, 569,
-                     597, 624, 651, 678, 704, 730,
-                     755, 780, 804, 829, 853, 876,
-                     899, 922, 945, 967, 989, 1010]
-
-order_center_red = [44, 84, 124, 163, 201, 238,
-                    274, 310, 344, 378, 411, 444,
-                    476, 507, 537, 567, 596, 624,
-                    652, 680, 706, 733, 758, 784,
-                    808, 832, 856, 880, 903, 926,
-                    948, 970, 992, 1013]
+import argparse
 
 def estimate_snr(file_name, arm='blue', read='fast', plot=False):
     """
@@ -25,6 +12,20 @@ def estimate_snr(file_name, arm='blue', read='fast', plot=False):
     on the blue arm of MIKE. It does not really work at the
     reddest orders (between orders 34 - 50ish on the red side).
     """
+    order_center_blue = [27, 63, 98, 133, 168, 201,
+                         235, 268, 300, 332, 363, 394,
+                         424, 454, 484, 513, 541, 569,
+                         597, 624, 651, 678, 704, 730,
+                         755, 780, 804, 829, 853, 876,
+                         899, 922, 945, 967, 989, 1010]
+    
+    order_center_red = [44, 84, 124, 163, 201, 238,
+                        274, 310, 344, 378, 411, 444,
+                        476, 507, 537, 567, 596, 624,
+                        652, 680, 706, 733, 758, 784,
+                        808, 832, 856, 880, 903, 926,
+                        948, 970, 992, 1013]
+
     try:
         data = fits.open(file_name)[0].data
     except:
@@ -107,3 +108,21 @@ def compare_estimate_vs_actual_snr(estimate_file_name, actual_file_name, arm='bl
     plt.xlabel('Order')
     plt.ylabel('SNR')
     plt.show()
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="Estimate the SNR of a raw spectrum"
+    )
+    parser.add_argument("file_name")
+    parser.add_argument("--arm", choices=['red', 'blue'], default='blue')
+    parser.add_argument("--read", choices=['fast', 'slow'], default='fast')
+    parser.add_argument("--plot", choices=['True', 'False'], default=False)
+    args = parser.parse_args()
+
+    file_name = args.file_name
+    arm = args.arm
+    read = args.read
+    plot = args.plot
+    
+    estimate_snr(file_name, arm=arm, read=read, plot=plot)
+    
