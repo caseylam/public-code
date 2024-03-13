@@ -21,7 +21,7 @@ def median_data(file_names):
 
     return med_data
 
-def get_continuum(wl_in, fl_in, pstep=100, k=3, exclude_wl=None):
+def get_continuum(wl_in, fl_in, pstep=100, k=3):
     """
     Based on https://github.com/howardisaacson/APF-BL-DAP/blob/main/Zoe/APFTutorial/APFtutorial.ipynb
     I think this is a somewhat simpler implementation.
@@ -55,17 +55,57 @@ def get_continuum(wl_in, fl_in, pstep=100, k=3, exclude_wl=None):
         # Get the knots for the spline fit
         flux95 = np.quantile(fl[idx][keep_idx], 0.95)
         blaze_fl[ii] = flux95
-
+        
     spl = splrep(blaze_wl, blaze_fl, s=500000, k=k)
     # This is the continuum
-    blaze_fit = splev(wl, spl)
+    print('original continuum')
+    continuum = splev(wl, spl)
+
+    first_deriv = np.diff(continuum)/np.diff(wl)
+    first_deriv = np.concatenate([np.array([first_deriv[0]]), first_deriv])
+    idx_up = argrelextrema(first_deriv, np.greater)[0]
+    idx_lo = argrelextrema(first_deriv, np.less)[0]
+    # Figure out where the relative extrema have the biggest difference,
+    # and then get rid of those spline points.
+    idx_extrema = np.sort(np.concatenate([idx_up, idx_lo]))
+    if len(idx_extrema) > 2:
+        extrema_diff = np.diff(continuum[idx_extrema])
+        extrema_diff_max_idx = np.abs(extrema_diff).argmax() + 1
+        good_idx = np.where((blaze_wl > wl[1:][idx_extrema[extrema_diff_max_idx + 1]]) |
+                            (blaze_wl < wl[1:][idx_extrema[extrema_diff_max_idx]]))[0]
+        
+        bins = np.arange(len(wl), step=pstep)
+        # bins = np.linspace(0, len(wl)-1, pstep, dtype = int, endpoint=True)
+        bins_wl = wl[bins]
+        blaze_wl = 0.5 * (bins_wl[:-1] + bins_wl[1:])
+        blaze_fl = np.zeros(len(blaze_wl))
+        for ii in np.arange(len(blaze_wl)):
+            idx = np.arange(bins[ii], bins[ii+1])
+            # Figure out a better way to remove cosmic rays and spikes,
+            # which tends to mess up things. Also find a way to mask absorption?
+            diff = np.concatenate([np.array([0]), np.diff(fl[idx])])
+            median, std = np.median(diff), np.std(diff)
+            _keep_idx = np.where((diff > median - 3*std) &
+                                 (diff < median + 3*std))[0]
+            _keep_idx2 = _keep_idx+1
+            keep_idx = np.concatenate([_keep_idx, _keep_idx2])
+            keep_idx = keep_idx[keep_idx < pstep]
+            
+            # Get the knots for the spline fit
+            flux95 = np.quantile(fl[idx][keep_idx], 0.95)
+            blaze_fl[ii] = flux95
+        
+        spl = splrep(blaze_wl[good_idx], blaze_fl[good_idx], s=500000, k=k)
+        # This is the continuum
+        print('new continuum')
+        continuum = splev(wl, spl)
 
     # I'm not 100% convinced this step is needed and that it always does what I want.
     # first_normalized_flux = fl / blaze_fit
     # flux98 = np.quantile(first_normalized_flux, 0.98)
     # blaze_fit2 = blaze_fit / flux98
-
-    return blaze_fit, blaze_wl, blaze_fl
+    print('return')
+    return continuum, blaze_wl, blaze_fl
 
 def get_continuum_iterative(wl_in, fl_in, pstep=100, k=3, niters=0):
     """
