@@ -64,6 +64,31 @@ def median_data(file_names):
     # If only two images, do something where you only keep spikes if present in both frames.
     return med_data
 
+def stack_remove_cr(file_names):
+    """
+    file_names : list of files to median
+    """
+    # should add special handling if only 2 images
+    # If only two images, do something where you only keep spikes if present in both frames.
+
+    _data = fits.open(file_names[0])[0].data
+    _stacked_data_normed = np.zeros(_data.shape + tuple([len(file_names)]))
+    _stacked_data = np.zeros(_data.shape + tuple([len(file_names)]))
+    for nn, file_name in enumerate(file_names):
+        data = fits.open(file_name)[0].data
+        # Normalize, so each frame in each order is on the same footing.
+        # Divide by the median of the order.
+        _stacked_data_normed[:,:,nn] = data/np.median(data, axis=1).reshape(data.shape[0],1)
+        _stacked_data[:,:,nn] = data
+    std = np.std(_stacked_data_normed, axis=2)
+    med = np.median(_stacked_data_normed, axis=2)
+    avg = np.average(_stacked_data_normed, axis=2)
+
+    # Interpolate over those points.
+    
+    
+    return med_data
+
 def get_continuum(wl_in, fl_in, pstep=100, k=3, pass2=False):
     """
     Based on https://github.com/howardisaacson/APF-BL-DAP/blob/main/Zoe/APFTutorial/APFtutorial.ipynb
