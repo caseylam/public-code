@@ -48,6 +48,29 @@ def calc_cross_correlation(wl_temp, fl_temp, wl, fl, rvmin, rvmax, rvstep):
         
     return rv_arr, ccf
 
+def calc_chi2(wl_temp, fl_temp, wl, fl, fl_err, rvmin, rvmax, rvstep):
+    """
+    The assumption here is that everything has been normalized already (both template and spectrum).
+    wl_temp, fl_temp are the template
+    wl, fl are the thing you want to measure RVs for
+    rvmin, rvmax, rvstep define the RVs you want to try.
+    """
+    # Regrid the template onto the same wavelength step as that of the 
+    fl_temp_matched_wl = np.interp(wl, wl_temp, fl_temp)
+    rv_arr = np.arange(rvmin, rvmax, rvstep)
+    ccf = np.zeros(len(rv_arr))
+    
+    for rr, rv in enumerate(rv_arr):
+        new_flux = doppler_shift(wl, fl_temp_matched_wl, rv)
+        # Debating this part. What are good limits? The assumption is that
+        # since things are normalized, you should really only have values
+        # between 0 and 1.
+        good_idx = np.where((fl_temp_matched_wl > 0) & (fl_temp_matched_wl < 1.2))[0]
+        chi2 = ((new_flux - fl)/fl_err)**2
+        ccf[rr] = np.sum(chi2[good_idx]) #/good_idx.sum()
+        
+    return rv_arr, ccf
+
 
 def median_data(file_names):
     """
@@ -67,10 +90,12 @@ def median_data(file_names):
 def stack_remove_cr(file_names):
     """
     file_names : list of files to median
+
+    Note: right now tuned for APF.
     """
     # should add special handling if only 2 images
     # If only two images, do something where you only keep spikes if present in both frames.
-
+    """
     _data = fits.open(file_names[0])[0].data
     _stacked_data_normed = np.zeros(_data.shape + tuple([len(file_names)]))
     _stacked_data = np.zeros(_data.shape + tuple([len(file_names)]))
@@ -83,11 +108,72 @@ def stack_remove_cr(file_names):
     std = np.std(_stacked_data_normed, axis=2)
     med = np.median(_stacked_data_normed, axis=2)
     avg = np.average(_stacked_data_normed, axis=2)
+    """
+    wl = fits.open('/Users/clam/data/APF/apf_wave_2022.fits')[0].data
+    
+    _data = fits.open(file_names[0])[0].data
 
-    # Interpolate over those points.
-    
-    
-    return med_data
+    # Combine all the data into a single array.
+    _stacked_data = np.zeros(_data.shape + tuple([len(file_names)]))
+
+    # Same as _stacked_data, but normalized by dividing by the median of the order,
+    # so each frame in each order is on the same footing.
+    _stacked_data_normed = np.zeros(_data.shape + tuple([len(file_names)]))
+
+    # Array for the final stacked and CR-cleaned data.
+    stacked_cleaned_data = np.zeros(_data.shape)
+
+    for nn, file_name in enumerate(file_names):
+        data = fits.open(file_name)[0].data
+        _stacked_data_normed[:,:,nn] = data/np.median(data, axis=1).reshape(data.shape[0],1)
+        _stacked_data[:,:,nn] = data
+    std = np.std(_stacked_data_normed, axis=2)
+    med = np.median(_stacked_data_normed, axis=2)
+    avg = np.average(_stacked_data_normed, axis=2)
+    add = np.sum(_stacked_data, axis=2)
+
+    # We define a "good" stack as where the standard deviation of the flux at that pixel
+    # is less than 3 times the median of the flux at that pixel. Choice of 3 was arbitrary...
+    # Interpolate over the "good" wavelengths, and use that to interpolate over the bad ones.
+    # Note that there are a bunch of APF points that have negative values. Those are always
+    # flagged as bad (since std is always positive).
+    # Does this introduce artifacts because negative values get changed to positive values???
+    for ii in np.arange(_data.shape[0]):
+        # Interpolate over those points for that order.
+        good_idx = np.where(std[ii] < 3*med[ii])[0]
+        bad_idx = np.where(std[ii] >= 3*med[ii])[0]
+        if len(bad_idx) > 0:
+            spl = splrep(wl[ii][good_idx], add[ii][good_idx])
+            fill = splev(wl[ii][bad_idx], spl)
+            stacked_cleaned_data[ii][bad_idx] = fill
+        stacked_cleaned_data[ii][good_idx] = add[ii][good_idx]
+
+    """
+    plt.figure()
+    for ii in np.arange(79):
+        plt.plot(wl[ii][:-1], np.sum(_stacked_data, axis=2)[ii][:-1], alpha=0.1, label='Stacked')
+        plt.plot(wl[ii][:-1], stacked_cleaned_data[ii][:-1], label='Stacked+cleaned')
+    plt.xlabel('Wavelength')
+    plt.ylabel('Flux')
+    plt.show()
+    """
+
+    return stacked_cleaned_data
+
+def stack(file_names):
+    """
+    file_names : list of files to median
+    """
+    _data = fits.open(file_names[0])[0].data
+
+    # Combine all the data into a single array.
+    stacked_data = np.zeros(_data.shape + tuple([len(file_names)]))
+
+    for nn, file_name in enumerate(file_names):
+        data = fits.open(file_name)[0].data
+        stacked_data[:,:,nn] = data
+
+    return np.sum(stacked_data, axis=2)
 
 def get_continuum(wl_in, fl_in, pstep=100, k=3, pass2=False):
     """
@@ -122,7 +208,7 @@ def get_continuum(wl_in, fl_in, pstep=100, k=3, pass2=False):
         keep_idx = keep_idx[keep_idx < pstep]
         """
         # Get the knots for the spline fit
-        flux95 = np.quantile(fl[idx][keep_idx], 0.95)
+        flux95 = np.quantile(fl[idx], 0.95)
         blaze_fl[ii] = flux95
         
     spl = splrep(blaze_wl, blaze_fl, s=500000, k=k)
@@ -150,6 +236,7 @@ def get_continuum(wl_in, fl_in, pstep=100, k=3, pass2=False):
             blaze_fl = np.zeros(len(blaze_wl))
             for ii in np.arange(len(blaze_wl)):
                 idx = np.arange(bins[ii], bins[ii+1])
+                
                 # Figure out a better way to remove cosmic rays and spikes,
                 # which tends to mess up things. Also find a way to mask absorption?
                 diff = np.concatenate([np.array([0]), np.diff(fl[idx])])
