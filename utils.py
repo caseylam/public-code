@@ -10,6 +10,35 @@ from scipy.signal import argrelextrema
 # Constants.
 c = 299792.458 # km/s
 
+def measure_rv_check(threshold):
+    wl = fits.open('/Users/clam/data/APF/apf_wave_2022.fits')[0].data
+    data_dir = '/Users/clam/data/APF/apf_standard_stars_10700/'
+    tau_ceti = fits.open(data_dir + 'raad.146.fits')[0].data + \
+        fits.open(data_dir + 'raad.147.fits')[0].data + \
+        fits.open(data_dir + 'raad.148.fits')[0].data
+    
+    tau_ceti_normalized = np.zeros(wl.shape)
+    for ii in np.arange(wl.shape[0]):
+        temp_continuum, _, _ = get_continuum(wl[ii], tau_ceti[ii], 100, 5)
+        tau_ceti_normalized[ii] = tau_ceti[ii]/temp_continuum
+
+    for kk, key in enumerate(np.arange(35, 40)):
+        rv_arr, ccf = calc_cross_correlation(wl[key][250:-250], tau_ceti_normalized[key][250:-250],
+                                                   wl[key][250:-250], tau_ceti_normalized[key][250:-250],
+                                                   -50, 50, 0.3, threshold)
+
+        rv_arr, ccf = calc_chi2(wl[key][250:-250], tau_ceti_normalized[key][250:-250],
+                                wl[key][250:-250], tau_ceti_normalized[key][250:-250],
+                                np.ones(len(wl[key][250:-250])),
+                                -50, 50, 0.3, threshold)
+
+        fig, ax = plt.subplots(1,2)
+        ax[0].plot(wl[key][250:-250], tau_ceti_normalized[key][250:-250])
+        ax[0].axhline(y=threshold)
+        ax[1].plot(np.arange(-50, 50, 0.3), ccf/np.quantile(ccf, 0.95))
+        ax[0].set_title('Order ' + str(key))
+        plt.show()
+        
 def doppler_shift(wavelength, flux, dv):
     """
     Based on https://github.com/pranav-nagarajan/DBSP-Flexure-Corrections/blob/main/DBSP%20Flexure%20Corrections.ipynb
@@ -26,13 +55,22 @@ def doppler_shift(wavelength, flux, dv):
     new_flux = splev(new_wavelength, spl)
     return new_flux
 
-def calc_cross_correlation(wl_temp, fl_temp, wl, fl, rvmin, rvmax, rvstep):
+def calc_cross_correlation(_wl_temp, _fl_temp, _wl, _fl, rvmin, rvmax, rvstep, threshold=0.9):
     """
     The assumption here is that everything has been normalized already (both template and spectrum).
     wl_temp, fl_temp are the template
     wl, fl are the thing you want to measure RVs for
     rvmin, rvmax, rvstep define the RVs you want to try.
+
+    Threshold: only keep things below a certain value so you aren't just cross correlating noise.
+    Since everything is normalized, generally, lines that are strong-ish should be smaller than 1.
     """
+    # Regrid the template onto the same wavelength step as that of the     
+    wl_temp = copy.deepcopy(_wl_temp)
+    fl_temp = copy.deepcopy(_fl_temp)
+    wl = copy.deepcopy(_wl)
+    fl = copy.deepcopy(_fl)
+    
     # Regrid the template onto the same wavelength step as that of the 
     fl_temp_matched_wl = np.interp(wl, wl_temp, fl_temp)
     rv_arr = np.arange(rvmin, rvmax, rvstep)
@@ -40,34 +78,42 @@ def calc_cross_correlation(wl_temp, fl_temp, wl, fl, rvmin, rvmax, rvstep):
     
     for rr, rv in enumerate(rv_arr):
         new_flux = doppler_shift(wl, fl_temp_matched_wl, rv)
-        # Debating this part. What are good limits? The assumption is that
-        # since things are normalized, you should really only have values
-        # between 0 and 1.
-        good_idx = ((new_flux * fl) < 1.2) & ((new_flux * fl) > 0)
-        ccf[rr] = np.sum((new_flux * fl)[good_idx])/good_idx.sum()
+        bad_idx_temp = np.where((new_flux < 0) & (new_flux > threshold))[0]
+        bad_idx = np.where((fl < 0) & (fl > threshold))[0]
+        new_flux[bad_idx_temp] = 0
+        fl[bad_idx] = 0
+        # good_idx = ((new_flux * fl) < 0.95) & ((new_flux * fl) > 0)
+        # ccf[rr] = np.sum((new_flux * fl)[good_idx])/good_idx.sum()
+        ccf[rr] = np.sum(new_flux * fl)
         
     return rv_arr, ccf
 
-def calc_chi2(wl_temp, fl_temp, wl, fl, fl_err, rvmin, rvmax, rvstep):
+def calc_chi2(_wl_temp, _fl_temp, _wl, _fl, _fl_err, rvmin, rvmax, rvstep, threshold=0.9):
     """
     The assumption here is that everything has been normalized already (both template and spectrum).
     wl_temp, fl_temp are the template
     wl, fl are the thing you want to measure RVs for
     rvmin, rvmax, rvstep define the RVs you want to try.
     """
+    wl_temp = copy.deepcopy(_wl_temp)
+    fl_temp = copy.deepcopy(_fl_temp)
+    wl = copy.deepcopy(_wl)
+    fl = copy.deepcopy(_fl)
+    fl_err = copy.deepcopy(_fl_err)
+    
     # Regrid the template onto the same wavelength step as that of the 
     fl_temp_matched_wl = np.interp(wl, wl_temp, fl_temp)
     rv_arr = np.arange(rvmin, rvmax, rvstep)
     ccf = np.zeros(len(rv_arr))
-    
+
     for rr, rv in enumerate(rv_arr):
         new_flux = doppler_shift(wl, fl_temp_matched_wl, rv)
-        # Debating this part. What are good limits? The assumption is that
-        # since things are normalized, you should really only have values
-        # between 0 and 1.
-        good_idx = np.where((fl_temp_matched_wl > 0) & (fl_temp_matched_wl < 1.2))[0]
+        # In the cross correlation, only include things below the threshold
+        # (both template and obs)
+        good_idx = np.where((new_flux < threshold) & (fl < threshold) &
+                            (new_flux > 0) & (fl > 0))[0]
         chi2 = ((new_flux - fl)/fl_err)**2
-        ccf[rr] = np.sum(chi2[good_idx]) #/good_idx.sum()
+        ccf[rr] = np.sum(chi2[good_idx]) # /good_idx.sum()
         
     return rv_arr, ccf
 
@@ -92,6 +138,11 @@ def stack_remove_cr(file_names):
     file_names : list of files to median
 
     Note: right now tuned for APF.
+
+    One way to remove CR is just median smoothing.
+    But I avoid that here because it can mess up the continuum measurement
+
+    The idea here is that we remove enough of the cosmic rays it doesn't mess up the continuum measurement.
     """
     # should add special handling if only 2 images
     # If only two images, do something where you only keep spikes if present in both frames.
