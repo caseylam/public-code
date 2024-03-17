@@ -6,11 +6,14 @@ import copy
 from astropy.io import fits
 from astropy.stats import sigma_clip
 from scipy.signal import argrelextrema
+from scipy.optimize import curve_fit
 
 # Constants.
 c = 299792.458 # km/s
 
-def measure_rv_check(threshold):
+# Get autocorrelation.
+# Have a "library" of wavelengths to mask out here. 
+def measure_rv_check(threshold, method):
     wl = fits.open('/Users/clam/data/APF/apf_wave_2022.fits')[0].data
     data_dir = '/Users/clam/data/APF/apf_standard_stars_10700/'
     tau_ceti = fits.open(data_dir + 'raad.146.fits')[0].data + \
@@ -18,27 +21,35 @@ def measure_rv_check(threshold):
         fits.open(data_dir + 'raad.148.fits')[0].data
     
     tau_ceti_normalized = np.zeros(wl.shape)
+    ccf_arr = np.zeros([79, len(np.arange(-50, 50, 0.3))])
     for ii in np.arange(wl.shape[0]):
         temp_continuum, _, _ = get_continuum(wl[ii], tau_ceti[ii], 100, 5)
         tau_ceti_normalized[ii] = tau_ceti[ii]/temp_continuum
 
-    for kk, key in enumerate(np.arange(35, 40)):
-        rv_arr, ccf = calc_cross_correlation(wl[key][250:-250], tau_ceti_normalized[key][250:-250],
-                                                   wl[key][250:-250], tau_ceti_normalized[key][250:-250],
-                                                   -50, 50, 0.3, threshold)
+    for kk, key in enumerate(np.arange(79)):
+        if method == 'ccf':
+            rv_arr, ccf = calc_cross_correlation(wl[key][250:-250], tau_ceti_normalized[key][250:-250],
+                                                 wl[key][250:-250], tau_ceti_normalized[key][250:-250],
+                                                 -50, 50, 0.3, threshold)
+            ccf_arr[kk] = ccf
+        if method == 'chi2':
+            rv_arr, ccf = calc_chi2(wl[key][250:-250], tau_ceti_normalized[key][250:-250],
+                                    wl[key][250:-250], tau_ceti_normalized[key][250:-250],
+                                    np.ones(len(wl[key][250:-250])),
+                                    -50, 50, 0.3, threshold)
+            ccf_arr[kk] = ccf
 
-        rv_arr, ccf = calc_chi2(wl[key][250:-250], tau_ceti_normalized[key][250:-250],
-                                wl[key][250:-250], tau_ceti_normalized[key][250:-250],
-                                np.ones(len(wl[key][250:-250])),
-                                -50, 50, 0.3, threshold)
-
-        fig, ax = plt.subplots(1,2)
+        fig, ax = plt.subplots(1,2, figsize=(12,1))
         ax[0].plot(wl[key][250:-250], tau_ceti_normalized[key][250:-250])
         ax[0].axhline(y=threshold)
         ax[1].plot(np.arange(-50, 50, 0.3), ccf/np.quantile(ccf, 0.95))
         ax[0].set_title('Order ' + str(key))
         plt.show()
-        
+
+    plt.figure()
+    plt.plot(np.arange(-50, 50, 0.3), np.average(ccf_arr, axis=0))
+    plt.show()
+    
 def doppler_shift(wavelength, flux, dv):
     """
     Based on https://github.com/pranav-nagarajan/DBSP-Flexure-Corrections/blob/main/DBSP%20Flexure%20Corrections.ipynb
@@ -50,13 +61,15 @@ def doppler_shift(wavelength, flux, dv):
 
     # Interpolate the spectrum onto the new wavelengths to figure out the new flux.
     # So the wavelength input is the same, the flux changes.
-    # (I still am not 100% clear in my mind how this works. Figure it out!)
+    # (I still am not 100% clear in my mind how this works, esp the signs. Figure it out!)
     spl = splrep(wavelength, flux)
     new_flux = splev(new_wavelength, spl)
     return new_flux
 
-def calc_cross_correlation(_wl_temp, _fl_temp, _wl, _fl, rvmin, rvmax, rvstep, threshold=0.9):
+def calc_cross_correlation(_wl_temp, _fl_temp, _wl, _fl, rvmin, rvmax, rvstep, threshold=1.0):
     """
+    Calculate the cross correlation function.
+    
     The assumption here is that everything has been normalized already (both template and spectrum).
     wl_temp, fl_temp are the template
     wl, fl are the thing you want to measure RVs for
@@ -78,8 +91,8 @@ def calc_cross_correlation(_wl_temp, _fl_temp, _wl, _fl, rvmin, rvmax, rvstep, t
     
     for rr, rv in enumerate(rv_arr):
         new_flux = doppler_shift(wl, fl_temp_matched_wl, rv)
-        bad_idx_temp = np.where((new_flux < 0) & (new_flux > threshold))[0]
-        bad_idx = np.where((fl < 0) & (fl > threshold))[0]
+        bad_idx_temp = np.where((new_flux < 0) | (new_flux > threshold))[0]
+        bad_idx = np.where((fl < 0) | (fl > threshold))[0]
         new_flux[bad_idx_temp] = 0
         fl[bad_idx] = 0
         # good_idx = ((new_flux * fl) < 0.95) & ((new_flux * fl) > 0)
@@ -88,7 +101,7 @@ def calc_cross_correlation(_wl_temp, _fl_temp, _wl, _fl, rvmin, rvmax, rvstep, t
         
     return rv_arr, ccf
 
-def calc_chi2(_wl_temp, _fl_temp, _wl, _fl, _fl_err, rvmin, rvmax, rvstep, threshold=0.9):
+def calc_chi2(_wl_temp, _fl_temp, _wl, _fl, _fl_err, rvmin, rvmax, rvstep, threshold=1.0):
     """
     The assumption here is that everything has been normalized already (both template and spectrum).
     wl_temp, fl_temp are the template
@@ -468,4 +481,10 @@ def plot_raw_cont_norm_everything(wl, fl, pstep):
     plt.title('color=# of knots, dash=k3, solid=k5')
     plt.show()
 
-    
+def parabola(x, a, b, c):
+    return a*x**2 + b*x	+ c
+
+def fit_vertex(x, y):
+    popt, pcov = curve_fit(parabola, x, y)
+    vertex = -popt[1] / (2 * popt[0])
+    return vertex
