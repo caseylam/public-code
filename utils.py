@@ -7,6 +7,9 @@ from astropy.io import fits
 from astropy.stats import sigma_clip
 from scipy.signal import argrelextrema
 from scipy.optimize import curve_fit
+from astropy import units as u
+from astropy.coordinates import SkyCoord, EarthLocation
+from astropy.time import Time
 
 # Constants.
 c = 299792.458 # km/s
@@ -481,6 +484,53 @@ def plot_raw_cont_norm_everything(wl, fl, pstep):
     plt.title('color=# of knots, dash=k3, solid=k5')
     plt.show()
 
+def get_barycorr_RV(file_name, spec):
+    """
+    Returns the barycentric correction in km/s.
+
+    Parameters
+    ----------
+    file_name : str
+    spec : 'apf' or 'mike'
+
+    Return
+    ------
+    Barycentric RV correction in km/s.
+
+    Based on the example at
+    https://docs.astropy.org/en/stable/coordinates/velocities.html#astropy-coordinates-rv-corrs
+
+    ADD the correction to the observed RV to get the barycentric RV.
+
+    Finally, should be applied as rv = rv + vcorr + rv * vcorr / c
+
+    See API for more details.
+    """
+    if spec == 'apf':
+        # Lick Observatory, cross check EarthLocation.of_site('Lick Observatory')
+        location = EarthLocation.from_geocentric(-2663565.85954086*u.m, -4323362.65807416*u.m, 3848537.52539178*u.m)
+    elif spec == 'mike':
+        # Las Campanas Observatory, cross check EarthLocation.of_site('Las Campanas Observatory')
+        location = EarthLocation.from_geocentric(1845655.49905341*u.m, -5270856.2947176*u.m, -3075330.77760682*u.m)
+    else:
+        raise Exception('Not a valid input for spec.')
+        
+    header = fits.open(file_name)[0].header
+        
+    # Both the MIKE and APF data have the same headers
+    date = header['DATE-OBS'] # ut
+    ra = header['RA']
+    dec = header['DEC']
+
+    obstime = Time(date, scale='utc')
+    sc = SkyCoord(ra, dec, unit=(u.hourangle, u.deg))    
+
+    barycorr = sc.radial_velocity_correction(kind='barycentric',
+                                             obstime=obstime, location=location).to(u.km/u.s)
+
+    return barycorr.value
+
+    
 def parabola(x, a, b, c):
     return a*x**2 + b*x	+ c
 
