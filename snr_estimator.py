@@ -124,5 +124,5 @@ if __name__ == "__main__":
     read = args.read
     plot = args.plot
     
-    estimate_snr(file_name, arm=arm, read=read, plot=plot)
+    estimate_snr(file_name, arm=arm, read=read, plot=False)
     
